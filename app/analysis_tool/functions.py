@@ -24,7 +24,10 @@ import pyarrow.parquet as pq
 import yaml
 from groq import Groq
 import matplotlib.pyplot as plt
-
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from textblob import TextBlob
+import streamlit as st
 
 # Initialize the Groq client
 client = Groq(api_key=config.GROQ_API_KEY)
@@ -47,7 +50,7 @@ def analyze_website(url: str) -> Dict[str, Any]:
         text_analysis = analyze_text(text)
         
         # Use Groq for enhanced analysis
-        prompt = f"Analyze the following text and provide insights:\n\n{text[:1000]}..."
+        prompt = f"Analyze the following text result and provide insights and analysis for technical and non-technical user:\n\n{text[:1000]}..."
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama3-8b-8192",
@@ -125,8 +128,17 @@ def analyze_text(text: str) -> Dict[str, Any]:
     sentence_count = len(re.findall(r'\w+[.!?]', text))
     frequent_words = pd.Series(text.lower().split()).value_counts().head(10)
 
+    stop_words = set(stopwords.words('english'))
+    word_tokens = word_tokenize(text.lower())
+    filtered_words = [w for w in word_tokens if w.isalnum() and w not in stop_words]
+    frequent_words = pd.Series(filtered_words).value_counts().head(10)
+
+    # Use TextBlob for sentiment analysis
+    blob = TextBlob(text)
+    sentiment = blob.sentiment.polarity
+    
     # Use Groq for enhanced analysis
-    prompt = f"Analyze the following text and provide insights:\n\n{text[:1000]}..."
+    prompt = f"Analyze the following text result and provide insights and analysis for technical and non-technical user:\n\n{text[:1000]}..."
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama3-8b-8192",
@@ -138,6 +150,7 @@ def analyze_text(text: str) -> Dict[str, Any]:
         "sentence_count": sentence_count,
         "frequent_words": frequent_words.to_dict(),
         "summary": text[:500] + "..." if len(text) > 500 else text,
+        "sentiment": sentiment,
         "ai_analysis": ai_analysis
     }
 
@@ -201,7 +214,7 @@ def analyze_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
         "shape": df.shape,
         "columns": df.columns.tolist(),
         "dtypes": df.dtypes.to_dict(),
-        "summary_stats": df.describe().to_dict(),
+        "summary_stats": df.describe(include='all').to_dict(),
         "null_counts": df.isnull().sum().to_dict(),
     }
 
@@ -220,7 +233,7 @@ def analyze_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
                 time_series_data[period] = resampled.to_dict()
 
         results["time_series"] = time_series_data
-
+            
         # ARIMA forecasting
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         if len(numeric_cols) > 0:
@@ -231,6 +244,18 @@ def analyze_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
                 forecast = fit_model.forecast(steps=30)  # Forecast next 30 periods
                 forecasts[col] = forecast.tolist()
             results["forecasts"] = forecasts
+
+        # Detect outliers
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) > 0:
+            outliers = {}
+            for col in numeric_cols:
+                Q1 = df[col].quantile(0.25)
+                Q3 = df[col].quantile(0.75)
+                IQR = Q3 - Q1
+                outlier_range = (Q1 - 1.5 * IQR, Q3 + 1.5 * IQR)
+                outliers[col] = df[(df[col] < outlier_range[0]) | (df[col] > outlier_range[1])].shape[0]
+            results["outliers"] = outliers
 
     # Correlation analysis for numerical columns
     num_cols = df.select_dtypes(include=[np.number]).columns
@@ -257,19 +282,21 @@ def analyze_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
             "r2": r2,
             "coefficients": dict(zip(features, model.coef_))
         }
-
+    results["data_validation"] = validate_data(df)
+    
     # Use Groq for enhanced analysis
-    prompt = f"Analyze the following dataset and provide insights:\n\n{df.head().to_string()}\n\nSummary statistics:\n{df.describe().to_string()}"
+    prompt = f"Analyze the following text result and provide insights and analysis for technical and non-technical user:\n\n{df.head().to_string()}\n\nSummary statistics:\n{df.describe().to_string()}"
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama3-8b-8192",
     )
+    
     results["ai_analysis"] = response.choices[0].message.content
-
+    
     return results
 
 def generate_groq_insights(data: Dict[str, Any]) -> Dict[str, str]:
-    prompt = f"Analyze the following data and provide business insights:\n\n{data}"
+    prompt = f"Analyze the following text result and provide insights and analysis for technical and non-technical user:\n\n{data}"
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama3-8b-8192",
@@ -277,12 +304,34 @@ def generate_groq_insights(data: Dict[str, Any]) -> Dict[str, str]:
     return {"groq_insights": response.choices[0].message.content}
 
 def generate_future_predictions(data: Dict[str, Any]) -> Dict[str, str]:
-    prompt = f"Based on the following data, predict future trends and objectives:\n\n{data}"
+    prompt = f"Based on the following data, predict future trends and recommendation to improve base on the context:\n\n{data}"
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama3-8b-8192",
     )
     return {"future_predictions": response.choices[0].message.content}
+
+def validate_data(df: pd.DataFrame) -> Dict[str, Any]:
+    validation_results = {}
+    
+    # Check for missing values
+    missing_values = df.isnull().sum()
+    validation_results["missing_values"] = missing_values[missing_values > 0].to_dict()
+    
+    # Check for duplicate rows
+    duplicate_rows = df.duplicated().sum()
+    validation_results["duplicate_rows"] = duplicate_rows
+    
+    # Check for constant columns
+    constant_columns = [col for col in df.columns if df[col].nunique() == 1]
+    validation_results["constant_columns"] = constant_columns
+    
+    # Check for high cardinality in categorical columns
+    cat_columns = df.select_dtypes(include=['object', 'category']).columns
+    high_cardinality = {col: df[col].nunique() for col in cat_columns if df[col].nunique() > 100}
+    validation_results["high_cardinality"] = high_cardinality
+    
+    return validation_results
 
 
 def generate_visualizations(data):
@@ -301,6 +350,28 @@ def generate_visualizations(data):
             fig = plt.gcf()
             visualizations['line_plot'] = fig
             plt.close(fig)
+
+        if 'dataframe' in data:
+            df = pd.DataFrame(data['dataframe'])
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) > 0:
+                plt.figure(figsize=(12, 6))
+                df[numeric_cols].boxplot()
+                plt.title('Box Plot of Numeric Columns')
+                plt.ylabel('Value')
+                plt.xticks(rotation=45)
+                fig = plt.gcf()
+                visualizations['box_plot'] = fig
+                plt.close(fig)
+
+        # Add a scatter matrix for numeric columns
+        if 'dataframe' in data:
+            df = pd.DataFrame(data['dataframe'])
+            numeric_cols = df.select_dtypes(include=[np.number]).columns[:4]  # Limit to 4 columns
+            if len(numeric_cols) > 1:
+                fig = sns.pairplot(df[numeric_cols])
+                visualizations['scatter_matrix'] = fig
+                plt.close(fig)
 
         # Example: Bar plot for summary statistics
         if 'summary_stats' in data:
