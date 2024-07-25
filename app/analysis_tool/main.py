@@ -17,12 +17,13 @@ import plotly.express as px
 
 def main():
     st.set_page_config(page_title="Business Analysis Toolkit", layout="wide")
-    st.title("Business Analysis Toolkit")
+    st.title("Data Analysis Toolkit")
 
-    menu = ["Upload File", "Analyze Website"]
+    menu = ["Analyze File", "Analyze Website"]
     choice = st.sidebar.selectbox("Choose an Option", menu)
+    
 
-    if choice == "Upload File":
+    if choice == "Analyze File":
         file_analysis()
     elif choice == "Analyze Website":
         website_analysis()
@@ -143,10 +144,10 @@ def display_insights_and_predictions(results):
     insights = generate_groq_insights(results)
     predictions = generate_future_predictions(results)
 
-    st.write("### Insights and Predictions")
+    st.write("### Insights")
     st.write("#### Business Insights")
     st.write(insights['groq_insights'])
-    st.write("#### Future Predictions")
+    st.write("#### Future Predictions and Recommendations")
     st.write(predictions['future_predictions'])
 
 if __name__ == "__main__":

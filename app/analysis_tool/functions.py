@@ -50,7 +50,7 @@ def analyze_website(url: str) -> Dict[str, Any]:
         text_analysis = analyze_text(text)
         
         # Use Groq for enhanced analysis
-        prompt = f"Analyze the following text result and provide insights and analysis for technical and non-technical user:\n\n{text[:1000]}..."
+        prompt = f"You are a report analysis tool that can be used to analyze any website content, type, and context. The tool should use web scraping to extract relevant data from the website, and then present the insights and analysis in a clear, structured, and concise manner. Improve the information structure:\n\n{text[:1000]}..."
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama3-8b-8192",
@@ -138,7 +138,7 @@ def analyze_text(text: str) -> Dict[str, Any]:
     sentiment = blob.sentiment.polarity
     
     # Use Groq for enhanced analysis
-    prompt = f"Analyze the following text result and provide insights and analysis for technical and non-technical user:\n\n{text[:1000]}..."
+    prompt = f"Please analyze the provided text and generate a summary that is easy to understand audiences. Provide insights and key takeaways from the text, highlighting any important information, trends, or patterns. Make sure the analysis is clear, concise, and accessible to users with varying levels of technical expertise:\n\n{text[:1000]}..."
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama3-8b-8192",
@@ -285,7 +285,7 @@ def analyze_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
     results["data_validation"] = validate_data(df)
     
     # Use Groq for enhanced analysis
-    prompt = f"Analyze the following text result and provide insights and analysis for technical and non-technical user:\n\n{df.head().to_string()}\n\nSummary statistics:\n{df.describe().to_string()}"
+    prompt = f"Please analyze the given text result and provide the following analytical insights: * Summary: Comprehensive overview of the data.* Data validation: Validate the data for accuracy, completeness, and consistency. * Predictive analysis: Use predictive models to forecast future trends and patterns. * Correlation analysis: Identify correlations between variables and provide insights on the relationships. * Outlier detection: Identify and explain any outliers in the data. * ARIMA forecasting: Use ARIMA models to forecast future values in the time series data. * Time series analysis: Conduct time series decomposition and analysis to identify trends, seasonality, and anomalies. Additionally, provide insights on how the AI analysis can be applied to this dataset:\n\n{df.head().to_string()}\n\nSummary statistics:\n{df.describe().to_string()}"
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama3-8b-8192",
@@ -296,7 +296,7 @@ def analyze_dataframe(df: pd.DataFrame) -> Dict[str, Any]:
     return results
 
 def generate_groq_insights(data: Dict[str, Any]) -> Dict[str, str]:
-    prompt = f"Analyze the following text result and provide insights and analysis for technical and non-technical user:\n\n{data}"
+    prompt = f"Analyze the following text result and provide valuable insights:\n\n{data}"
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama3-8b-8192",
@@ -304,7 +304,7 @@ def generate_groq_insights(data: Dict[str, Any]) -> Dict[str, str]:
     return {"groq_insights": response.choices[0].message.content}
 
 def generate_future_predictions(data: Dict[str, Any]) -> Dict[str, str]:
-    prompt = f"Based on the following data, predict future trends and recommendation to improve base on the context:\n\n{data}"
+    prompt = f"Based on the following data, predict future trends and recommendation to improve based on the context. If possible, use expert point of view, international proven standard, and best practices:\n\n{data}"
     response = client.chat.completions.create(
         messages=[{"role": "user", "content": prompt}],
         model="llama3-8b-8192",
