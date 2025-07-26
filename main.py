@@ -20,6 +20,34 @@ from functions import (
     generate_visualizations
 )
 import config
+import re
+import nltk
+from textblob import TextBlob
+from collections import Counter
+from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.corpus import stopwords
+from nltk.tag import pos_tag
+from nltk.chunk import ne_chunk
+from string import punctuation
+
+# Download required NLTK data
+try:
+    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('averaged_perceptron_tagger')
+    nltk.data.find('maxent_ne_chunker')
+    nltk.data.find('words')
+    nltk.data.find('stopwords')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('averaged_perceptron_tagger')
+    nltk.download('maxent_ne_chunker')
+    nltk.download('words')
+    nltk.download('stopwords')
+    # Add these specific downloads
+    nltk.download('omw-1.4')  # Open Multilingual Wordnet
+    nltk.download('averaged_perceptron_tagger')
+    nltk.download('maxent_ne_chunker')
+    nltk.download('words')
 
 # Configure logging to filter out PDF warnings
 logging.getLogger('pdfminer').setLevel(logging.ERROR)
@@ -125,11 +153,11 @@ def main():
             st.session_state.current_page = 'website'
             
     with col3:
-        if st.button("📊 Analytics Dashboard",
-                    key="nav_dashboard",
-                    help="View analytics and insights",
+        if st.button("📝 Text Analyzer",
+                    key="nav_text_analyzer",
+                    help="Analyze text content and get insights",
                     use_container_width=True):
-            st.session_state.current_page = 'dashboard'
+            st.session_state.current_page = 'text_analyzer'
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -138,8 +166,8 @@ def main():
         handle_file_upload()
     elif st.session_state.current_page == "website":
         handle_website_analysis()
-    elif st.session_state.current_page == "dashboard":
-        show_dashboard()
+    elif st.session_state.current_page == "text_analyzer":
+        text_analyzer()
 
 def handle_file_upload():
     """Display the file upload page with enhanced UI."""
@@ -1199,35 +1227,408 @@ def display_ai_insights_tab(results):
     else:
         st.info("AI analysis not available for this file type")
 
-def show_dashboard():
-    """Display the dashboard page with enhanced UI."""
-    st.header("📊 Analytics Dashboard")
+def text_analyzer():
+    """Display the text analyzer interface with comprehensive analysis features."""
+    st.header("📝 Text Analysis")
+    st.markdown("Analyze text content for insights, sentiment, and key information")
     
-    # Dashboard sections with better styling
-    col1, col2, col3, col4 = st.columns(4)
+    # Input methods
+    input_method = st.radio(
+        "Choose input method:",
+        ["Direct Text Input", "Text File Upload"],
+        horizontal=True
+    )
+    
+    text_content = None
+    
+    if input_method == "Direct Text Input":
+        text_content = st.text_area(
+            "Enter your text for analysis",
+            height=200,
+            placeholder="Paste or type your text here..."
+        )
+        
+    else:  # Text File Upload
+        uploaded_file = st.file_uploader(
+            "Upload a text file",
+            type=['txt', 'md'],
+            help="Upload a text file for analysis"
+        )
+        
+        if uploaded_file:
+            try:
+                text_content = uploaded_file.getvalue().decode('utf-8')
+            except Exception as e:
+                st.error(f"Error reading file: {str(e)}")
+                return
+    
+    if text_content and text_content.strip():
+        # Analysis options
+        st.subheader("Analysis Options")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            do_sentiment = st.checkbox("Sentiment Analysis", value=True)
+        with col2:
+            do_keywords = st.checkbox("Keyword Extraction", value=True)
+        with col3:
+            do_summary = st.checkbox("Text Summarization", value=True)
+            
+        # Process button
+        if st.button("Analyze Text", type="primary"):
+            with st.spinner("Analyzing text..."):
+                # Basic text statistics
+                stats = analyze_text_stats(text_content)
+                
+                # Display basic metrics
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Words", stats["word_count"])
+                col2.metric("Sentences", stats["sentence_count"])
+                col3.metric("Avg Word Length", f"{stats['avg_word_length']:.1f}")
+                col4.metric("Reading Time", f"{stats['reading_time']:.1f} min")
+                
+                # Create tabs for different analyses
+                tab1, tab2, tab3, tab4 = st.tabs([
+                    "📊 Overview",
+                    "😊 Sentiment",
+                    "🔑 Keywords",
+                    "📝 Summary"
+                ])
+                
+                with tab1:
+                    display_text_overview(stats, text_content)
+                
+                with tab2:
+                    if do_sentiment:
+                        display_sentiment_analysis(text_content)
+                
+                with tab3:
+                    if do_keywords:
+                        display_keyword_analysis(text_content)
+                
+                with tab4:
+                    if do_summary:
+                        display_text_summary(text_content)
+
+def analyze_text_stats(text):
+    """Analyze basic text statistics."""
+    words = text.split()
+    sentences = re.split(r'[.!?]+', text)
+    
+    return {
+        "word_count": len(words),
+        "sentence_count": len(sentences),
+        "char_count": len(text),
+        "avg_word_length": sum(len(word) for word in words) / max(len(words), 1),
+        "avg_sentence_length": len(words) / max(len(sentences), 1),
+        "reading_time": len(words) / 200,  # Assuming 200 words per minute
+        "unique_words": len(set(words)),
+        "unique_ratio": len(set(words)) / max(len(words), 1)
+    }
+
+def display_text_overview(stats, text):
+    """Display comprehensive text overview."""
+    st.subheader("Text Overview")
+    
+    # Additional metrics
+    col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-        st.metric("Files Analyzed", "0")
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-    with col2:
-        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-        st.metric("Websites Analyzed", "0")
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-    with col3:
-        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-        st.metric("Total Insights", "0")
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-    with col4:
-        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-        st.metric("API Calls", "0")
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.info("📊 Text Statistics")
+        st.write(f"**Characters:** {stats['char_count']}")
+        st.write(f"**Unique Words:** {stats['unique_words']}")
+        st.write(f"**Avg Sentence Length:** {stats['avg_sentence_length']:.1f} words")
+        st.write(f"**Vocabulary Diversity:** {stats['unique_ratio']:.1%}")
     
-    # Placeholder for future dashboard features
-    st.info("Enhanced dashboard features coming soon!")
+    with col2:
+        st.info("📈 Word Length Distribution")
+        words = text.split()
+        lengths = [len(word) for word in words]
+        
+        if lengths:
+            import altair as alt
+            df = pd.DataFrame({'length': lengths})
+            chart = alt.Chart(df).mark_bar().encode(
+                x=alt.X('length:Q', bin=True, title='Word Length'),
+                y=alt.Y('count()', title='Frequency')
+            ).properties(height=200)
+            st.altair_chart(chart, use_container_width=True)
+
+def display_sentiment_analysis(text):
+    """Display sentiment analysis using TextBlob."""
+    st.subheader("Sentiment Analysis")
+    
+    try:
+        # Create TextBlob object
+        blob = TextBlob(text)
+        
+        # Get overall sentiment
+        polarity = blob.sentiment.polarity
+        subjectivity = blob.sentiment.subjectivity
+        
+        # Determine sentiment category and confidence
+        if polarity > 0:
+            sentiment = "positive"
+            confidence = min(abs(polarity) * 100, 100)
+        elif polarity < 0:
+            sentiment = "negative"
+            confidence = min(abs(polarity) * 100, 100)
+        else:
+            sentiment = "neutral"
+            confidence = 50
+        
+        # Display results with visual elements
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Sentiment indicator
+            sentiment_color = {
+                'positive': '🟢',
+                'negative': '🔴',
+                'neutral': '🟡'
+            }.get(sentiment, '🟡')
+            
+            st.metric("Overall Sentiment", 
+                     f"{sentiment_color} {sentiment.title()}", 
+                     f"Confidence: {confidence:.1f}%")
+            
+            st.metric("Subjectivity", 
+                     f"{subjectivity:.1%}",
+                     "Higher % = More subjective")
+        
+        with col2:
+            # Analyze sentence-level sentiment
+            sentences = blob.sentences
+            sentence_sentiments = [
+                (str(sent), sent.sentiment.polarity) 
+                for sent in sentences[:3]
+            ]
+            
+            st.write("**Notable Phrases:**")
+            for sent, sent_polarity in sentence_sentiments:
+                if abs(sent_polarity) > 0.2:  # Only show significant sentiments
+                    emoji = "📈" if sent_polarity > 0 else "📉"
+                    st.write(f"{emoji} *{sent}*")
+        
+        # Detailed analysis
+        st.markdown("#### Detailed Analysis")
+        analysis_text = [
+            f"The text expresses a {sentiment} sentiment overall.",
+            f"The content is {subjectivity:.1%} subjective in nature.",
+            "Key emotional indicators suggest " + (
+                "strong feelings" if abs(polarity) > 0.5
+                else "moderate emotions" if abs(polarity) > 0.2
+                else "neutral or mixed emotions"
+            )
+        ]
+        st.write(" ".join(analysis_text))
+                
+    except Exception as e:
+        st.error(f"Error in sentiment analysis: {str(e)}")
+
+def display_keyword_analysis(text):
+    """Display keyword and key phrase extraction using NLTK."""
+    st.subheader("Key Terms and Phrases")
+    
+    try:
+        # Tokenize and clean text
+        words = word_tokenize(text.lower())
+        stop_words = set(stopwords.words('english') + list(punctuation))
+        words = [word for word in words if word not in stop_words and word.isalnum()]
+        
+        # Get word frequency
+        word_freq = Counter(words)
+        
+        # Get named entities with error handling
+        try:
+            chunks = ne_chunk(pos_tag(word_tokenize(text)))
+            entities = {
+                'PERSON': [],
+                'ORGANIZATION': [],
+                'GPE': []  # Geo-Political Entities
+            }
+            
+            for chunk in chunks:
+                if hasattr(chunk, 'label'):
+                    if chunk.label() in entities:
+                        entities[chunk.label()].append(' '.join([c[0] for c in chunk]))
+        except Exception as ner_error:
+            logger.warning(f"Named Entity Recognition failed: {str(ner_error)}")
+            entities = {}
+        
+        # Get key phrases (using POS patterns)
+        tagged = pos_tag(word_tokenize(text))
+        phrases = []
+        for i in range(len(tagged)-1):
+            if (tagged[i][1].startswith('JJ') and tagged[i+1][1].startswith('NN')) or \
+               (tagged[i][1].startswith('NN') and tagged[i+1][1].startswith('NN')):
+                phrases.append(f"{tagged[i][0]} {tagged[i+1][0]}")
+        
+        # Display results in organized sections
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.info("🎯 Main Keywords")
+            top_words = word_freq.most_common(7)
+            for word, count in top_words:
+                st.write(f"• {word} ({count})")
+            
+            st.info("🔤 Key Phrases")
+            for phrase in phrases[:5]:
+                st.write(f"• {phrase}")
+        
+        with col2:
+            if entities:
+                st.info("📍 Named Entities")
+                for entity_type, entity_list in entities.items():
+                    if entity_list:
+                        st.write(f"**{entity_type}:**")
+                        for entity in set(entity_list):
+                            st.write(f"• {entity}")
+            
+            st.info("📊 Word Frequency")
+            freq_data = pd.DataFrame(top_words, columns=['word', 'count'])
+            if not freq_data.empty:
+                import altair as alt
+                chart = alt.Chart(freq_data).mark_bar().encode(
+                    x=alt.X('count:Q', title='Frequency'),
+                    y=alt.Y('word:N', sort='-x', title='Word'),
+                    tooltip=['word', 'count']
+                ).properties(height=min(len(freq_data) * 25, 200))
+                st.altair_chart(chart, use_container_width=True)
+        
+        # Topics section (using simple clustering of frequent words)
+        topics = []
+        for word, _ in word_freq.most_common(10):
+            related_words = [w for w, c in word_freq.items() 
+                           if w != word and (w.startswith(word) or word.startswith(w))]
+            if related_words:
+                topics.append(f"{word} ({', '.join(related_words[:2])})")
+        
+        if topics:
+            st.info("📚 Main Topics")
+            cols = st.columns(min(len(topics), 3))
+            for i, topic in enumerate(topics[:3]):
+                cols[i].markdown(f"**{topic}**")
+                
+    except Exception as e:
+        st.error(f"Error in keyword extraction: {str(e)}")
+        logger.error(f"Keyword extraction error: {str(e)}")
+
+def display_text_summary(text):
+    """Display text summarization using extractive summarization."""
+    st.subheader("Text Summary")
+    
+    try:
+        # Tokenize the text
+        sentences = sent_tokenize(text)
+        words = word_tokenize(text.lower())
+        
+        # Remove stopwords and punctuation
+        stop_words = set(stopwords.words('english') + list(punctuation))
+        words = [word for word in words if word not in stop_words and word.isalnum()]
+        
+        # Calculate word frequency
+        word_freq = Counter(words)
+        
+        # Calculate sentence scores based on word frequency
+        sentence_scores = {}
+        for sentence in sentences:
+            for word in word_tokenize(sentence.lower()):
+                if word in word_freq:
+                    if sentence not in sentence_scores:
+                        sentence_scores[sentence] = word_freq[word]
+                    else:
+                        sentence_scores[sentence] += word_freq[word]
+        
+        # Get summary sentences
+        summary_sentences = sorted(
+            sentence_scores.items(), 
+            key=lambda x: x[1], 
+            reverse=True
+        )[:3]
+        
+        # Analyze complexity
+        avg_word_length = sum(len(word) for word in words) / len(words)
+        avg_sentence_length = len(words) / len(sentences)
+        unique_words_ratio = len(set(words)) / len(words)
+        
+        if avg_word_length > 6 or avg_sentence_length > 20:
+            complexity = "ADVANCED"
+        elif avg_word_length > 5 or avg_sentence_length > 15:
+            complexity = "INTERMEDIATE"
+        else:
+            complexity = "BASIC"
+        
+        # Display results
+        st.info("📝 Summary")
+        summary_text = " ".join(sent for sent, _ in summary_sentences)
+        st.write(summary_text)
+        
+        # Main points and key elements
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.info("🎯 Key Elements")
+            points = [
+                f"Contains {len(sentences)} sentences",
+                f"Uses {len(set(words))} unique words",
+                f"Average sentence length: {avg_sentence_length:.1f} words"
+            ]
+            for point in points:
+                st.write(f"• {point}")
+        
+        with col2:
+            st.info("💡 Content Analysis")
+            takeaways = [
+                f"Vocabulary diversity: {unique_words_ratio:.1%}",
+                f"Average word length: {avg_word_length:.1f} characters",
+                f"Text complexity: {complexity.title()}"
+            ]
+            for takeaway in takeaways:
+                st.write(f"• {takeaway}")
+        
+        # Style analysis
+        st.info("✍️ Writing Style")
+        style_col1, style_col2 = st.columns(2)
+        
+        with style_col1:
+            # Analyze writing style
+            style_analysis = []
+            if avg_sentence_length > 20:
+                style_analysis.append("Uses complex, detailed sentences")
+            elif avg_sentence_length < 10:
+                style_analysis.append("Uses concise, direct sentences")
+            else:
+                style_analysis.append("Uses balanced sentence structure")
+            
+            if unique_words_ratio > 0.8:
+                style_analysis.append("Rich, varied vocabulary")
+            elif unique_words_ratio < 0.4:
+                style_analysis.append("Consistent, focused vocabulary")
+            else:
+                style_analysis.append("Moderate vocabulary range")
+            
+            st.write(" ".join(style_analysis))
+        
+        with style_col2:
+            complexity_icon = {
+                'BASIC': '🟢',
+                'INTERMEDIATE': '🟡',
+                'ADVANCED': '🔴'
+            }.get(complexity, '⚪')
+            st.write(f"**Complexity Level:** {complexity_icon} {complexity}")
+            
+            # Determine target audience based on complexity
+            audience = {
+                'BASIC': "General audience",
+                'INTERMEDIATE': "Informed readers",
+                'ADVANCED': "Expert/Academic audience"
+            }.get(complexity)
+            st.write(f"**Target Audience:** {audience}")
+                
+    except Exception as e:
+        st.error(f"Error in text summarization: {str(e)}")
 
 if __name__ == "__main__":
     main() 
