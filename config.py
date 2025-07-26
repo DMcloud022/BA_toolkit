@@ -17,11 +17,6 @@ else:
 # Access the environment variables
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# Debug information
-print(f"GROQ_API_KEY found: {'Yes' if GROQ_API_KEY else 'No'}")
-if GROQ_API_KEY:
-    print(f"GROQ_API_KEY starts with: {GROQ_API_KEY[:10]}...")
-
 # If not found, provide helpful error message
 if not GROQ_API_KEY:
     print("\n" + "="*50)
@@ -44,6 +39,22 @@ SUPPORTED_FILE_TYPES = {
     'database': ['db', 'sqlite', 'sqlite3']
 }
 
+# Cache settings
+CACHE_ENABLED = True
+CACHE_DURATION = 3600  # 1 hour in seconds
+MAX_CACHE_ENTRIES = 100
+
+# Analysis settings
+MIN_WORDS_FOR_ANALYSIS = 50
+MAX_WORDS_FOR_SUMMARY = 1000
+CORRELATION_THRESHOLD = 0.7
+MAX_CATEGORICAL_VALUES = 50
+
 # AI Model settings
 DEFAULT_MODEL = "llama3-8b-8192"
-MAX_TOKENS = 4096 
+MAX_TOKENS = 4096
+
+# Visualization settings
+DEFAULT_FIGURE_SIZE = (10, 6)
+MAX_CATEGORIES_IN_PLOT = 20
+PLOT_STYLE = 'seaborn-v0_8' 

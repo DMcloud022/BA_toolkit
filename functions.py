@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 import sqlite3
 from io import StringIO, BytesIO
 import docx2txt
-from pypdf import PdfReader  # Updated from PyPDF2
+from pypdf import PdfReader
 from typing import Dict, Any, Optional, List
 import re
 from sklearn.model_selection import train_test_split
@@ -26,6 +26,10 @@ from groq import Groq
 import warnings
 from pathlib import Path
 import logging
+import hashlib
+from datetime import datetime, timedelta
+from functools import lru_cache
+from urllib.parse import urljoin
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -34,22 +38,39 @@ logger = logging.getLogger(__name__)
 # Suppress warnings
 warnings.filterwarnings('ignore')
 
-# Initialize the Groq client with error handling
-try:
-    if config.GROQ_API_KEY:
-        client = Groq(api_key=config.GROQ_API_KEY)
-        print("✅ Groq client initialized successfully")
-    else:
-        client = None
-        print("⚠️ Groq client not initialized - API key not found")
-except Exception as e:
-    logger.error(f"Failed to initialize Groq client: {e}")
-    client = None
+__all__ = [
+    'analyze_website',
+    'analyze_document',
+    'analyze_excel',
+    'analyze_database',
+    'analyze_json',
+    'analyze_xml',
+    'analyze_parquet',
+    'analyze_yaml',
+    'analyze_text',
+    'generate_visualizations'
+]
+
+def initialize_groq_client():
+    """Initialize Groq client with better error handling."""
+    try:
+        if config.GROQ_API_KEY:
+            return Groq(api_key=config.GROQ_API_KEY)
+        else:
+            logger.warning("Groq API key not found. AI analysis will be limited.")
+            return None
+    except Exception as e:
+        logger.error(f"Failed to initialize Groq client: {e}")
+        return None
+
+# Initialize the Groq client
+client = initialize_groq_client()
 
 def safe_groq_request(prompt: str, max_retries: int = 3) -> str:
-    """Safely make a request to Groq API with retries."""
+    """Safely make a request to Groq API with retries and fallback analysis."""
     if not client:
-        return "AI analysis unavailable - Please set your GROQ_API_KEY in the .env file"
+        # Provide basic analysis without API
+        return generate_basic_analysis(prompt)
     
     for attempt in range(max_retries):
         try:
@@ -62,51 +83,166 @@ def safe_groq_request(prompt: str, max_retries: int = 3) -> str:
         except Exception as e:
             logger.warning(f"Groq API attempt {attempt + 1} failed: {e}")
             if attempt == max_retries - 1:
-                return f"AI analysis unavailable - API error: {str(e)}"
+                # Fallback to basic analysis on final retry
+                return generate_basic_analysis(prompt)
     
-    return "AI analysis unavailable"
+    return generate_basic_analysis(prompt)
+
+def generate_basic_analysis(prompt: str) -> str:
+    """Generate basic analysis without using AI API."""
+    try:
+        # Extract key metrics from the prompt
+        metrics = extract_metrics_from_prompt(prompt)
+        
+        # Generate insights based on available metrics
+        insights = []
+        
+        if "readability_score" in metrics:
+            score = metrics["readability_score"]
+            if score > 60:
+                insights.append("The content has good readability.")
+            else:
+                insights.append("The content might be difficult to read for some audiences.")
+        
+        if "word_count" in metrics:
+            count = metrics["word_count"]
+            if count < 300:
+                insights.append("The content is relatively short.")
+            elif count > 1000:
+                insights.append("The content is comprehensive.")
+        
+        if "headings" in metrics and metrics["headings"] > 0:
+            insights.append("The content is well-structured with proper headings.")
+        
+        if "links" in metrics and metrics["links"] > 0:
+            insights.append("The content contains useful links for navigation and references.")
+        
+        # Add general recommendations
+        recommendations = [
+            "Consider reviewing the content for clarity and conciseness.",
+            "Ensure the content structure follows web accessibility guidelines.",
+            "Regular content updates can help maintain relevance.",
+            "Consider adding more visual elements if appropriate."
+        ]
+        
+        # Combine insights and recommendations
+        analysis = "Content Analysis:\n\n"
+        analysis += "Key Insights:\n- " + "\n- ".join(insights) + "\n\n"
+        analysis += "Recommendations:\n- " + "\n- ".join(recommendations)
+        
+        return analysis
+        
+    except Exception as e:
+        logger.error(f"Error generating basic analysis: {e}")
+        return "Basic content analysis is currently unavailable."
+
+def extract_metrics_from_prompt(prompt: str) -> Dict[str, Any]:
+    """Extract metrics from the analysis prompt."""
+    metrics = {}
+    
+    try:
+        # Extract word count
+        word_count_match = re.search(r"word_count\":\s*(\d+)", prompt)
+        if word_count_match:
+            metrics["word_count"] = int(word_count_match.group(1))
+        
+        # Extract readability score
+        readability_match = re.search(r"flesch_reading_ease\":\s*([\d.]+)", prompt)
+        if readability_match:
+            metrics["readability_score"] = float(readability_match.group(1))
+        
+        # Extract heading count
+        headings_match = re.search(r"total\":\s*(\d+)", prompt)
+        if headings_match:
+            metrics["headings"] = int(headings_match.group(1))
+        
+        # Extract link count
+        links_match = re.search(r"total_links\":\s*(\d+)", prompt)
+        if links_match:
+            metrics["links"] = int(links_match.group(1))
+            
+    except Exception as e:
+        logger.warning(f"Error extracting metrics from prompt: {e}")
+    
+    return metrics
+
+def get_cache_key(url: str) -> str:
+    """Generate a cache key for a URL."""
+    return hashlib.md5(url.encode()).hexdigest()
 
 def analyze_website(url: str) -> Dict[str, Any]:
-    """Analyze website content with improved error handling."""
+    """Analyze website content with comprehensive error handling and robust parsing."""
     try:
         # Add timeout and headers for better reliability
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Connection': 'keep-alive',
         }
-        response = requests.get(url, headers=headers, timeout=30)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Remove script and style elements
-        for script in soup(["script", "style"]):
-            script.decompose()
-        
-        text = soup.get_text()
-        text = re.sub(r'\s+', ' ', text).strip()  # Clean up whitespace
-        
-        # Extract metadata with better error handling
-        title = soup.title.string.strip() if soup.title and soup.title.string else "No title found"
-        
-        description_tag = soup.find('meta', attrs={'name': 'description'}) or \
-                         soup.find('meta', attrs={'property': 'og:description'})
-        description = description_tag.get('content', 'No description found') if description_tag else 'No description found'
-        
-        keywords_tag = soup.find('meta', attrs={'name': 'keywords'})
-        keywords = keywords_tag.get('content', 'No keywords found') if keywords_tag else 'No keywords found'
+        # Use session for better connection handling
+        with requests.Session() as session:
+            session.headers.update(headers)
+            response = session.get(url, timeout=30, allow_redirects=True)
+            response.raise_for_status()
+            
+            # Detect encoding
+            if response.encoding is None:
+                response.encoding = response.apparent_encoding
+            
+            # Parse with BeautifulSoup
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Basic metadata extraction
+            metadata = extract_metadata(soup, url)
+            
+            # Content analysis
+            content_analysis = analyze_content(soup)
+            
+            # Links analysis
+            links_analysis = analyze_links(soup, url)
+            
+            # Combine all analyses
+            analysis_results = {
+                **metadata,
+                **content_analysis,
+                **links_analysis,
+                "url": url,
+                "status_code": response.status_code,
+                "encoding": response.encoding,
+                "content_type": response.headers.get('content-type', 'Unknown'),
+                "server": response.headers.get('server', 'Unknown'),
+            }
+            
+            # Generate AI analysis prompt
+            ai_prompt = f"""Analyze this website content and provide insights about:
+1. Content Quality and Structure
+2. SEO and Metadata
+3. User Experience
+4. Technical Implementation
+5. Recommendations for Improvement
 
-        # Analyze the text content
-        text_analysis = analyze_text(text)
-        
-        return {
-            "title": title,
-            "description": description,
-            "keywords": keywords,
-            "url": url,
-            "content_length": len(text),
-            **text_analysis
-        }
+Website URL: {url}
+Content Stats:
+- Words: {content_analysis.get('word_count', 0)}
+- Readability Score: {content_analysis.get('readability', {}).get('flesch_reading_ease', 0)}
+- Headings: {content_analysis.get('headings', {}).get('count', {}).get('total', 0)}
+- Links: {links_analysis.get('links_analysis', {}).get('total_links', 0)}
+- Images: {content_analysis.get('content_structure', {}).get('images', 0)}
+
+Title: {metadata.get('title', 'No title')}
+Description: {metadata.get('description', 'No description')}"""
+
+            # Get AI analysis
+            analysis_results["ai_analysis"] = safe_groq_request(ai_prompt)
+            
+            return analysis_results
+            
     except requests.exceptions.Timeout:
         return {"error": "Request timeout - website took too long to respond"}
+    except requests.exceptions.TooManyRedirects:
+        return {"error": "Too many redirects - could not reach final destination"}
     except requests.exceptions.ConnectionError:
         return {"error": "Connection error - unable to reach website"}
     except requests.exceptions.HTTPError as e:
@@ -114,6 +250,397 @@ def analyze_website(url: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Website analysis error: {e}")
         return {"error": f"Failed to analyze website: {str(e)}"}
+
+def extract_metadata(soup: BeautifulSoup, url: str) -> Dict[str, Any]:
+    """Extract comprehensive metadata from webpage."""
+    metadata = {
+        "title": "No title found",
+        "description": "No description found",
+        "keywords": "No keywords found",
+        "author": "No author found",
+        "language": "Unknown",
+        "favicon": None,
+        "og_data": {},
+        "twitter_data": {},
+        "schema_data": {},
+        "security": {},
+        "technologies": set(),
+    }
+    
+    try:
+        # Title with fallbacks
+        if soup.title and soup.title.string:
+            metadata["title"] = soup.title.string.strip()
+        else:
+            og_title = soup.find('meta', property='og:title')
+            if og_title:
+                metadata["title"] = og_title.get('content', '').strip()
+        
+        # Meta tags
+        for meta in soup.find_all('meta'):
+            name = meta.get('name', '').lower()
+            property = meta.get('property', '').lower()
+            content = meta.get('content', '').strip()
+            
+            if name in ['description', 'keywords', 'author', 'language'] or \
+               property in ['og:description', 'og:site_name']:
+                metadata[name] = content
+            elif name == 'generator':
+                metadata['technologies'].add(f"CMS: {content}")
+            elif name in ['robots', 'googlebot']:
+                metadata['technologies'].add(f"SEO: {content}")
+            
+            # Security headers
+            if name in ['content-security-policy', 'x-frame-options', 'x-xss-protection']:
+                metadata['security'][name] = content
+        
+        # OpenGraph data
+        og_tags = ['title', 'description', 'image', 'type', 'site_name', 'locale']
+        for tag in og_tags:
+            og_meta = soup.find('meta', property=f'og:{tag}')
+            if og_meta:
+                metadata["og_data"][tag] = og_meta.get('content', '').strip()
+        
+        # Twitter Card data
+        twitter_tags = ['card', 'site', 'creator', 'title', 'description', 'image']
+        for tag in twitter_tags:
+            twitter_meta = soup.find('meta', attrs={'name': f'twitter:{tag}'})
+            if twitter_meta:
+                metadata["twitter_data"][tag] = twitter_meta.get('content', '').strip()
+        
+        # Schema.org data
+        for schema in soup.find_all(['script', 'meta'], attrs={'type': 'application/ld+json'}):
+            try:
+                if schema.string:
+                    schema_data = json.loads(schema.string)
+                    if isinstance(schema_data, dict):
+                        metadata["schema_data"].update(schema_data)
+            except json.JSONDecodeError:
+                continue
+        
+        # Favicon with multiple fallbacks
+        favicon_links = [
+            ('icon', 'shortcut icon', 'apple-touch-icon'),
+            ('image/x-icon', 'image/png', 'image/jpeg')
+        ]
+        for rel_values, types in zip(*favicon_links):
+            for rel, type_ in zip(rel_values.split(), types.split()):
+                favicon = soup.find('link', rel=rel, type=type_)
+                if favicon and favicon.get('href'):
+                    favicon_url = favicon['href']
+                    if not favicon_url.startswith(('http://', 'https://')):
+                        favicon_url = urljoin(url, favicon_url)
+                    metadata["favicon"] = favicon_url
+                    break
+            if metadata["favicon"]:
+                break
+        
+        # Detect technologies
+        # JavaScript frameworks
+        if soup.find('script', src=lambda x: x and 'react' in x.lower()):
+            metadata['technologies'].add('Framework: React')
+        if soup.find('script', src=lambda x: x and 'vue' in x.lower()):
+            metadata['technologies'].add('Framework: Vue.js')
+        if soup.find('script', src=lambda x: x and 'angular' in x.lower()):
+            metadata['technologies'].add('Framework: Angular')
+        
+        # Analytics
+        if soup.find('script', src=lambda x: x and 'google-analytics' in x.lower()):
+            metadata['technologies'].add('Analytics: Google Analytics')
+        if soup.find('script', src=lambda x: x and 'gtag' in x.lower()):
+            metadata['technologies'].add('Analytics: Google Tag Manager')
+        
+        # Convert technologies set to sorted list
+        metadata['technologies'] = sorted(list(metadata['technologies']))
+        
+        return metadata
+        
+    except Exception as e:
+        logger.warning(f"Error extracting metadata: {e}")
+        return metadata
+
+def analyze_content(soup: BeautifulSoup) -> Dict[str, Any]:
+    """Analyze webpage content with enhanced features."""
+    try:
+        # Remove unwanted elements
+        for element in soup(['script', 'style', 'nav', 'header', 'footer', 'iframe']):
+            element.decompose()
+        
+        # Extract main content with better targeting
+        main_content = (
+            soup.find('main') or 
+            soup.find('article') or 
+            soup.find('div', class_=lambda x: x and any(c in x.lower() for c in ['content', 'main', 'article'])) or
+            soup
+        )
+        
+        # Get text content
+        text = main_content.get_text(separator=' ', strip=True)
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Basic text analysis
+        words = text.split()
+        sentences = re.split(r'[.!?]+', text)
+        paragraphs = [p for p in text.split('\n\n') if p.strip()]
+        
+        # Enhanced content analysis
+        analysis = {
+            "content_length": len(text),
+            "word_count": len(words),
+            "sentence_count": len(sentences),
+            "paragraph_count": len(paragraphs),
+            "avg_words_per_sentence": round(len(words) / max(len(sentences), 1), 2),
+            "avg_sentence_length": round(len(text) / max(len(sentences), 1), 2),
+            "text_density": round(len(text) / (len(text) + len(str(soup))), 3),
+            "headings": analyze_headings(soup),
+            "content_structure": analyze_structure(soup),
+            "language_metrics": analyze_language(text),
+            "text_sample": text[:config.MAX_WORDS_FOR_SUMMARY] + "..." if len(text) > config.MAX_WORDS_FOR_SUMMARY else text
+        }
+        
+        # Word frequency and readability
+        analysis["frequent_words"] = analyze_word_frequency(words)
+        analysis["readability"] = calculate_readability(text)
+        
+        return analysis
+        
+    except Exception as e:
+        logger.warning(f"Error analyzing content: {e}")
+        return {"error": "Failed to analyze content"}
+
+def analyze_headings(soup: BeautifulSoup) -> Dict[str, Any]:
+    """Analyze heading structure of the webpage."""
+    try:
+        headings = {'h1': [], 'h2': [], 'h3': [], 'h4': [], 'h5': [], 'h6': []}
+        heading_count = {'total': 0}
+        
+        for level in range(1, 7):
+            tag = f'h{level}'
+            elements = soup.find_all(tag)
+            headings[tag] = [h.get_text().strip() for h in elements]
+            heading_count[tag] = len(elements)
+            heading_count['total'] += len(elements)
+        
+        return {
+            'structure': headings,
+            'count': heading_count,
+            'has_proper_structure': heading_count.get('h1', 0) == 1
+        }
+    except Exception as e:
+        logger.warning(f"Error analyzing headings: {e}")
+        return {}
+
+def analyze_structure(soup: BeautifulSoup) -> Dict[str, Any]:
+    """Analyze the structural elements of the webpage."""
+    try:
+        structure = {
+            'lists': {
+                'ordered': len(soup.find_all('ol')),
+                'unordered': len(soup.find_all('ul')),
+                'definition': len(soup.find_all('dl'))
+            },
+            'tables': len(soup.find_all('table')),
+            'forms': len(soup.find_all('form')),
+            'images': len(soup.find_all('img')),
+            'videos': len(soup.find_all(['video', 'iframe[src*="youtube"], iframe[src*="vimeo"]'])),
+            'interactive': {
+                'buttons': len(soup.find_all('button')),
+                'inputs': len(soup.find_all('input')),
+                'links': len(soup.find_all('a'))
+            }
+        }
+        
+        # Calculate content type ratios
+        total_elements = sum(structure['lists'].values()) + structure['tables'] + \
+                        structure['forms'] + structure['images'] + structure['videos']
+        
+        if total_elements > 0:
+            structure['composition'] = {
+                'text_heavy': structure['lists']['ordered'] + structure['lists']['unordered'] > total_elements * 0.3,
+                'media_rich': (structure['images'] + structure['videos']) > total_elements * 0.3,
+                'interactive': structure['forms'] + structure['interactive']['buttons'] > total_elements * 0.2
+            }
+        
+        return structure
+    except Exception as e:
+        logger.warning(f"Error analyzing structure: {e}")
+        return {}
+
+def analyze_language(text: str) -> Dict[str, Any]:
+    """Analyze language patterns and complexity."""
+    try:
+        # Basic patterns
+        patterns = {
+            'questions': len(re.findall(r'\?', text)),
+            'exclamations': len(re.findall(r'!', text)),
+            'numbers': len(re.findall(r'\d+', text)),
+            'urls': len(re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', text)),
+            'emails': len(re.findall(r'[\w\.-]+@[\w\.-]+\.\w+', text)),
+            'parentheses': len(re.findall(r'\(.*?\)', text))
+        }
+        
+        # Word complexity
+        words = text.split()
+        long_words = sum(1 for w in words if len(w) > 6)
+        very_long_words = sum(1 for w in words if len(w) > 10)
+        
+        complexity = {
+            'avg_word_length': round(sum(len(w) for w in words) / max(len(words), 1), 2),
+            'long_words_ratio': round(long_words / max(len(words), 1), 3),
+            'very_long_words_ratio': round(very_long_words / max(len(words), 1), 3),
+            'unique_words_ratio': round(len(set(words)) / max(len(words), 1), 3)
+        }
+        
+        return {
+            'patterns': patterns,
+            'complexity': complexity
+        }
+    except Exception as e:
+        logger.warning(f"Error analyzing language: {e}")
+        return {}
+
+def analyze_links(soup: BeautifulSoup, base_url: str) -> Dict[str, Any]:
+    """Analyze webpage links."""
+    try:
+        from urllib.parse import urljoin, urlparse
+        
+        links = soup.find_all('a', href=True)
+        link_analysis = {
+            "total_links": len(links),
+            "internal_links": 0,
+            "external_links": 0,
+            "social_links": 0,
+            "resource_links": 0,
+            "unique_domains": set()
+        }
+        
+        base_domain = urlparse(base_url).netloc
+        
+        for link in links:
+            try:
+                href = link['href']
+                if not href or href.startswith(('javascript:', 'mailto:', 'tel:')):
+                    continue
+                    
+                if not href.startswith(('http://', 'https://')):
+                    href = urljoin(base_url, href)
+                
+                parsed = urlparse(href)
+                domain = parsed.netloc
+                
+                if not domain:
+                    continue
+                
+                # Add to unique domains
+                link_analysis["unique_domains"].add(domain)
+                
+                # Categorize link
+                if domain == base_domain:
+                    link_analysis["internal_links"] += 1
+                elif any(social in domain for social in ['facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com']):
+                    link_analysis["social_links"] += 1
+                elif href.endswith(('.pdf', '.doc', '.docx', '.xls', '.xlsx', '.zip', '.rar')):
+                    link_analysis["resource_links"] += 1
+                else:
+                    link_analysis["external_links"] += 1
+            except Exception as e:
+                logger.debug(f"Error processing link: {e}")
+                continue
+        
+        # Convert set to list for JSON serialization
+        link_analysis["unique_domains"] = sorted(list(link_analysis["unique_domains"]))
+        
+        return {"links_analysis": link_analysis}
+        
+    except Exception as e:
+        logger.warning(f"Error analyzing links: {e}")
+        return {"error": "Failed to analyze links"}
+
+def analyze_word_frequency(words: List[str], top_n: int = 10) -> Dict[str, int]:
+    """Analyze word frequency excluding common words."""
+    try:
+        # Common English stop words to exclude
+        stop_words = set(['the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 
+                         'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at'])
+        
+        # Clean and filter words
+        word_freq = {}
+        for word in words:
+            word = word.lower().strip('.,!?";()[]{}')
+            if len(word) > 2 and word not in stop_words and word.isalnum():
+                word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # Get top N frequent words
+        sorted_freq = dict(sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:top_n])
+        
+        # Ensure we have at least one item
+        if not sorted_freq:
+            return {"no_significant_words": 1}
+            
+        return sorted_freq
+        
+    except Exception as e:
+        logger.warning(f"Error analyzing word frequency: {e}")
+        return {"error_analyzing": 1}
+
+def calculate_readability(text: str) -> Dict[str, float]:
+    """Calculate readability metrics."""
+    try:
+        # Count sentences, words, and syllables
+        sentences = max(1, len(re.split(r'[.!?]+', text)))
+        words = max(1, len(text.split()))
+        syllables = max(1, sum(count_syllables(word) for word in text.split()))
+        
+        # Calculate Flesch Reading Ease score
+        flesch_score = 206.835 - 1.015 * (words / sentences) - 84.6 * (syllables / words)
+        flesch_score = max(0, min(100, flesch_score))  # Clamp between 0 and 100
+        
+        # Calculate reading time (assuming 200 words per minute)
+        reading_time = max(0.1, words / 200)  # Minimum 0.1 minutes
+        
+        return {
+            "flesch_reading_ease": round(flesch_score, 2),
+            "estimated_reading_time": round(reading_time, 2)
+        }
+        
+    except Exception as e:
+        logger.warning(f"Error calculating readability: {e}")
+        return {
+            "flesch_reading_ease": 0,
+            "estimated_reading_time": 0
+        }
+
+def count_syllables(word: str) -> int:
+    """Estimate number of syllables in a word."""
+    try:
+        word = word.lower().strip('.,!?')
+        count = 0
+        vowels = 'aeiouy'
+        prev_char_is_vowel = False
+        
+        for char in word:
+            is_vowel = char in vowels
+            if is_vowel and not prev_char_is_vowel:
+                count += 1
+            prev_char_is_vowel = is_vowel
+        
+        # Handle some common cases
+        if word.endswith('e'):
+            count -= 1
+        if word.endswith('le') and len(word) > 2 and word[-3] not in vowels:
+            count += 1
+        if count == 0:
+            count = 1
+            
+        return count
+        
+    except Exception:
+        return 1
+
+@lru_cache(maxsize=100)
+def analyze_website_cached(url: str, cache_time: int) -> Dict[str, Any]:
+    """Cached version of website analysis."""
+    return analyze_website(url)
 
 def analyze_document(file) -> Dict[str, Any]:
     """Analyze document with improved file type detection and error handling."""
@@ -131,10 +658,39 @@ def analyze_document(file) -> Dict[str, Any]:
             text = docx2txt.process(BytesIO(file_content))
             
         elif file.name.lower().endswith('.pdf') or file.type == "application/pdf":
-            reader = PdfReader(BytesIO(file_content))
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() or ""
+            try:
+                # Use pypdf for better PDF handling
+                reader = PdfReader(BytesIO(file_content))
+                text = ""
+                total_pages = len(reader.pages)
+                
+                # Extract text from each page
+                for i, page in enumerate(reader.pages, 1):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n\n"
+                    logger.info(f"Processed PDF page {i}/{total_pages}")
+                
+                if not text.strip():
+                    return {
+                        "error": "No readable text found in PDF. The file might be scanned or protected.",
+                        "suggestions": [
+                            "Check if the PDF contains actual text (not scanned images)",
+                            "Ensure the PDF is not password-protected",
+                            "Try converting scanned PDFs using OCR software first"
+                        ]
+                    }
+                
+            except Exception as e:
+                logger.error(f"PDF processing error: {str(e)}")
+                return {
+                    "error": f"Failed to process PDF: {str(e)}",
+                    "suggestions": [
+                        "Check if the file is a valid PDF",
+                        "Ensure the file is not corrupted",
+                        "Try saving the PDF with a different PDF viewer"
+                    ]
+                }
                 
         elif file.name.lower().endswith('.json') or file.type == "application/json":
             return analyze_json(file)
@@ -239,21 +795,22 @@ def analyze_text(text: str) -> Dict[str, Any]:
     if not text or not text.strip():
         return {"error": "Empty or invalid text content"}
     
-    # Clean text
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    # Basic metrics
-    words = text.split()
-    word_count = len(words)
-    sentence_count = len(re.findall(r'[.!?]+', text))
-    paragraph_count = len([p for p in text.split('\n\n') if p.strip()])
-    
-    # Word frequency analysis
-    word_freq = pd.Series([word.lower().strip('.,!?";()[]{}') for word in words if len(word) > 2])
-    frequent_words = word_freq.value_counts().head(10)
+    try:
+        # Clean text
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        # Basic metrics
+        words = text.split()
+        word_count = len(words)
+        sentence_count = len(re.findall(r'[.!?]+', text))
+        paragraph_count = len([p for p in text.split('\n\n') if p.strip()])
+        
+        # Word frequency analysis
+        word_freq = pd.Series([word.lower().strip('.,!?";()[]{}') for word in words if len(word) > 2])
+        frequent_words = word_freq.value_counts().head(10)
 
-    # AI analysis
-    prompt = f"""Analyze the following text and provide insights about:
+        # AI analysis
+        prompt = f"""Analyze the following text and provide insights about:
 1. Main topics and themes
 2. Tone and sentiment
 3. Key information
@@ -262,17 +819,29 @@ def analyze_text(text: str) -> Dict[str, Any]:
 Text (first 1000 characters):
 {text[:1000]}..."""
 
-    ai_analysis = safe_groq_request(prompt)
+        ai_analysis = safe_groq_request(prompt)
 
-    return {
-        "word_count": word_count,
-        "sentence_count": sentence_count,
-        "paragraph_count": paragraph_count,
-        "avg_words_per_sentence": round(word_count / max(sentence_count, 1), 2),
-        "frequent_words": frequent_words.to_dict(),
-        "summary": text[:500] + "..." if len(text) > 500 else text,
-        "ai_analysis": ai_analysis
-    }
+        return {
+            "word_count": word_count,
+            "sentence_count": sentence_count,
+            "paragraph_count": paragraph_count,
+            "avg_words_per_sentence": round(word_count / max(sentence_count, 1), 2),
+            "frequent_words": frequent_words.to_dict(),
+            "summary": text[:500] + "..." if len(text) > 500 else text,
+            "ai_analysis": ai_analysis,
+            "text_stats": {
+                "characters": len(text),
+                "words": word_count,
+                "unique_words": len(set(words)),
+                "sentences": sentence_count,
+                "paragraphs": paragraph_count,
+                "avg_word_length": round(sum(len(word) for word in words) / max(len(words), 1), 2),
+                "avg_sentence_length": round(word_count / max(sentence_count, 1), 2)
+            }
+        }
+    except Exception as e:
+        logger.error(f"Text analysis error: {e}")
+        return {"error": f"Failed to analyze text: {str(e)}"}
 
 def analyze_json(file) -> Dict[str, Any]:
     """Analyze JSON files with improved structure detection."""
