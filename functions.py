@@ -637,11 +637,6 @@ def count_syllables(word: str) -> int:
     except Exception:
         return 1
 
-@lru_cache(maxsize=100)
-def analyze_website_cached(url: str, cache_time: int) -> Dict[str, Any]:
-    """Cached version of website analysis."""
-    return analyze_website(url)
-
 def analyze_document(file) -> Dict[str, Any]:
     """Analyze document with improved file type detection and error handling."""
     try:
@@ -710,37 +705,36 @@ def analyze_document(file) -> Dict[str, Any]:
         return analyze_text(text)
         
     except Exception as e:
-        logger.error(f"Document analysis error: {e}")
-        return {"error": f"Failed to analyze document: {str(e)}"}
+        # Consolidate error handling
+        error_msg = str(e)
+        logger.error(f"Document analysis error: {error_msg}")
+        return {
+            "error": f"Failed to analyze document: {error_msg}",
+            "suggestions": [
+                "Check if the file is valid and not corrupted",
+                "Ensure the file format is supported",
+                "Try saving the file with a different application"
+            ]
+        }
 
 def analyze_excel(file) -> Dict[str, Any]:
     """Analyze Excel/CSV files with improved encoding detection and error handling."""
     try:
         file_content = file.getvalue()
         
-        if file.name.lower().endswith('.csv') or file.type == "text/csv":
-            # Detect encoding for CSV files
+        # Simplify file type checking
+        is_csv = file.name.lower().endswith('.csv') or file.type == "text/csv"
+        is_excel = file.name.lower().endswith(('.xlsx', '.xls'))
+        
+        if is_csv:
+            # CSV handling
             detected = chardet.detect(file_content)
             encoding = detected.get('encoding', 'utf-8')
-            
-            try:
-                df = pd.read_csv(BytesIO(file_content), encoding=encoding)
-            except UnicodeDecodeError:
-                # Fallback encodings
-                for fallback_encoding in ['latin1', 'cp1252', 'iso-8859-1']:
-                    try:
-                        df = pd.read_csv(BytesIO(file_content), encoding=fallback_encoding)
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                else:
-                    raise UnicodeDecodeError("Unable to decode CSV file")
-                    
-        elif file.name.lower().endswith(('.xlsx', '.xls')):
-            # Use openpyxl engine for better compatibility
+            df = pd.read_csv(BytesIO(file_content), encoding=encoding)
+        elif is_excel:
+            # Excel handling
             engine = 'openpyxl' if file.name.lower().endswith('.xlsx') else 'xlrd'
             df = pd.read_excel(BytesIO(file_content), engine=engine)
-            
         else:
             return {"error": f"Unsupported spreadsheet format: {file.name}"}
             

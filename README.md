@@ -1,4 +1,4 @@
-# BA_toolkit
+# Analysis_toolkit
 
 A toolkit for business analysis tasks.
 
@@ -41,5 +41,3 @@ streamlit run main.py
 ```
 
 This will start the Streamlit server and automatically open the application in your default web browser. If it doesn't open automatically, you can access it at `http://localhost:8501`.
-
-## Project Structure 

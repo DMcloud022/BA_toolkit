@@ -1,12 +1,9 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
 import logging
-import json
-import yaml
+import warnings
 from typing import Dict, Any, Optional, Tuple
 from pypdf import PdfReader
-import warnings
 from functions import (
     analyze_website,
     analyze_document,
@@ -55,11 +52,8 @@ from security import SecurityManager
 from security_config import SECURITY_CONFIG, SECURITY_HEADERS
 import streamlit.components.v1 as components
 import os
-import secrets
-import magic
 import validators
-from datetime import datetime, timedelta
-from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 # Initialize security manager after other configurations
@@ -124,7 +118,7 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    # Configure security headers through session state
+    # Remove unused session state setup
     if 'security_headers_set' not in st.session_state:
         for header, value in SECURITY_HEADERS.items():
             st.session_state[f"_{header}"] = value
@@ -133,23 +127,6 @@ def main():
     # Custom CSS for better styling
     st.markdown("""
         <style>
-        .main-nav {
-            padding: 1rem 0;
-            margin-bottom: 2rem;
-            border-bottom: 2px solid #f0f2f6;
-        }
-        .nav-button {
-            border: none;
-            padding: 15px 30px;
-            text-align: center;
-            text-decoration: none;
-            display: inline-block;
-            font-size: 16px;
-            margin: 4px 8px;
-            cursor: pointer;
-            border-radius: 4px;
-            transition: all 0.3s;
-        }
         .nav-button-active {
             background-color: #ff4b4b;
             color: white;
@@ -1486,12 +1463,16 @@ def display_text_overview(stats, text):
     """Display comprehensive text overview."""
     st.subheader("Text Overview")
     
-    # Additional metrics
-    col1, col2 = st.columns(2)
+    # Combine these columns into a single info section
+    st.info("📊 Text Statistics")
+    col1, col2 = st.columns(2)  # Reduce from 4 columns to 2
     
     with col1:
-        st.info("📊 Text Statistics")
         st.write(f"**Characters:** {stats['char_count']}")
+        st.write(f"**Words:** {stats['word_count']}")
+        st.write(f"**Sentences:** {stats['sentence_count']}")
+        
+    with col2:
         st.write(f"**Unique Words:** {stats['unique_words']}")
         st.write(f"**Avg Sentence Length:** {stats['avg_sentence_length']:.1f} words")
         st.write(f"**Vocabulary Diversity:** {stats['unique_ratio']:.1%}")
