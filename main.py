@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import logging
 import json
 import yaml
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 from pypdf import PdfReader
 import warnings
 from functions import (
@@ -19,6 +19,28 @@ from functions import (
     analyze_text,
     generate_visualizations
 )
+
+# Configure logging first
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Configure specific loggers
+logging.getLogger('pdfminer').setLevel(logging.ERROR)
+warnings.filterwarnings('ignore', category=UserWarning)
+
+# Sentiment analysis constants
+NEGATIVE_INDICATORS = [
+    "not", "isn't", "aren't", "wasn't", "weren't",
+    "don't", "doesn't", "didn't", "won't", "wouldn't",
+    "can't", "couldn't", "shouldn't", "won't",
+    "bad", "poor", "unhappy", "disappointed", "unfortunate",
+    "problem", "issue", "fail", "error", "bug",
+    "not happy", "not satisfied", "not good"
+]
+
 import config
 import re
 import nltk
@@ -29,39 +51,84 @@ from nltk.corpus import stopwords
 from nltk.tag import pos_tag
 from nltk.chunk import ne_chunk
 from string import punctuation
+from security import SecurityManager
+from security_config import SECURITY_CONFIG, SECURITY_HEADERS
+import streamlit.components.v1 as components
+import os
+import secrets
+import magic
+import validators
+from datetime import datetime, timedelta
+from collections import defaultdict
+from pathlib import Path
+
+# Initialize security manager after other configurations
+security_manager = SecurityManager()
+security_checks = security_manager.verify_security_setup()
+
+if not all(security_checks.values()):
+    logger.error("Security setup verification failed!")
+    failed_checks = [check for check, result in security_checks.items() if not result]
+    logger.error(f"Failed checks: {failed_checks}")
+
+# Add cleanup on exit
+import atexit
+atexit.register(security_manager.cleanup)
 
 # Download required NLTK data
+def setup_nltk():
+    """Set up NLTK resources with proper error handling."""
+    logger.info("Setting up NLTK resources...")
+    
+    required_resources = {
+        'punkt': 'tokenizers/punkt',
+        'averaged_perceptron_tagger': 'taggers/averaged_perceptron_tagger',
+        'maxent_ne_chunker': 'chunkers/maxent_ne_chunker',
+        'words': 'corpora/words',
+        'stopwords': 'corpora/stopwords',
+        'omw-1.4': 'corpora/omw-1.4',
+        'maxent_ne_chunker_tab': 'chunkers/maxent_ne_chunker_tab'
+    }
+    
+    for resource_name, resource_path in required_resources.items():
+        try:
+            nltk.data.find(resource_path)
+            logger.debug(f"NLTK resource already available: {resource_name}")
+        except LookupError:
+            try:
+                logger.info(f"Downloading NLTK resource: {resource_name}")
+                nltk.download(resource_name, quiet=True)
+                logger.info(f"Successfully downloaded NLTK resource: {resource_name}")
+            except Exception as e:
+                logger.warning(f"Failed to download NLTK resource {resource_name}: {str(e)}")
+                if resource_name == 'maxent_ne_chunker_tab':
+                    logger.info("Will use alternative NER approach")
+                else:
+                    logger.warning(f"Missing NLTK resource may affect functionality: {resource_name}")
+
+    logger.info("NLTK setup completed")
+
+# Initialize NLTK
 try:
-    nltk.data.find('tokenizers/punkt')
-    nltk.data.find('averaged_perceptron_tagger')
-    nltk.data.find('maxent_ne_chunker')
-    nltk.data.find('words')
-    nltk.data.find('stopwords')
-except LookupError:
-    nltk.download('punkt')
-    nltk.download('averaged_perceptron_tagger')
-    nltk.download('maxent_ne_chunker')
-    nltk.download('words')
-    nltk.download('stopwords')
-    # Add these specific downloads
-    nltk.download('omw-1.4')  # Open Multilingual Wordnet
-    nltk.download('averaged_perceptron_tagger')
-    nltk.download('maxent_ne_chunker')
-    nltk.download('words')
+    setup_nltk()
+except Exception as e:
+    logger.error(f"Error during NLTK setup: {str(e)}")
+    logger.info("Continuing with limited NLTK functionality")
 
-# Configure logging to filter out PDF warnings
-logging.getLogger('pdfminer').setLevel(logging.ERROR)
-warnings.filterwarnings('ignore', category=UserWarning)
-
-logger = logging.getLogger(__name__)
 
 def main():
     st.set_page_config(
-        page_title="Business Analysis Toolkit", 
+        page_title="Analysis Toolkit", 
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded"
     )
+    
+    # Configure security headers through session state
+    if 'security_headers_set' not in st.session_state:
+        for header, value in SECURITY_HEADERS.items():
+            st.session_state[f"_{header}"] = value
+        st.session_state.security_headers_set = True
 
     # Custom CSS for better styling
     st.markdown("""
@@ -127,7 +194,7 @@ def main():
     
     # Main header
     st.title("📊 Business Analysis Toolkit")
-    st.markdown("*Powerful analytics for your business data and web content*")
+    st.markdown("*Powerful analytics for your business data and web content created by Daniel Florencio*")
     st.markdown("---")
 
     # Navigation using buttons in main area
@@ -172,7 +239,6 @@ def main():
 def handle_file_upload():
     """Display the file upload page with enhanced UI."""
     
-    
     # File upload section
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -192,15 +258,16 @@ def handle_file_upload():
         help="Drag and drop or click to upload"
     )
 
-    st.markdown('</div>', unsafe_allow_html=True)
-
     if uploaded_file:
         try:
-            # Validate file
-            validation_result = validate_uploaded_file(uploaded_file)
-            if validation_result.get("error"):
-                st.error(validation_result["error"])
+            # Security validation
+            is_valid, message = security_manager.validate_file(uploaded_file)
+            if not is_valid:
+                st.error(f"❌ Security validation failed: {message}")
                 return
+            
+            # Create secure temporary file
+            temp_file = security_manager.create_secure_temp_file(uploaded_file.getvalue())
             
             # Display file information
             display_file_info(uploaded_file)
@@ -209,9 +276,17 @@ def handle_file_upload():
             with st.spinner("🔄 Analyzing file..."):
                 analysis_results = process_file(uploaded_file)
                 display_analysis_results(analysis_results, uploaded_file.name)
+                
         except Exception as e:
             st.error(f"❌ Analysis failed: {str(e)}")
             logger.error(f"File analysis error: {str(e)}")
+        finally:
+            # Cleanup any temporary files
+            if 'temp_file' in locals():
+                try:
+                    os.remove(temp_file)
+                except Exception as e:
+                    logger.error(f"Error removing temporary file: {e}")
 
 def validate_uploaded_file(file) -> Dict[str, Any]:
     """Validate uploaded file for size, format, and content."""
@@ -415,12 +490,8 @@ def process_file(uploaded_file):
 
 def handle_website_analysis():
     """Display the website analysis page with enhanced UI."""
-    
-    
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.header("🌐 Website Analysis")
-        st.markdown("Enter a website URL to analyze its content and structure")
+    st.header("🌐 Website Analysis")
+    st.markdown("Enter a website URL to analyze its content and structure")
     
     # URL input with better styling
     url = st.text_input(
@@ -430,8 +501,10 @@ def handle_website_analysis():
     )
 
     if url:
-        if not url.startswith(('http://', 'https://')):
-            st.warning("⚠️ Please include http:// or https:// in the URL")
+        # Security validation
+        is_valid, message = security_manager.validate_url(url)
+        if not is_valid:
+            st.error(f"❌ Security validation failed: {message}")
             return
         
         # Show analysis in progress
@@ -1236,51 +1309,114 @@ def text_analyzer():
     input_method = st.radio(
         "Choose input method:",
         ["Direct Text Input", "Text File Upload"],
-        horizontal=True
+        horizontal=True,
+        help="Choose how you want to input your text for analysis"
     )
     
     text_content = None
     
     if input_method == "Direct Text Input":
-        text_content = st.text_area(
-            "Enter your text for analysis",
-            height=200,
-            placeholder="Paste or type your text here..."
+        # Add a clear description
+        st.markdown("#### Enter Text for Analysis")
+        st.markdown("Type or paste your text below and click 'Analyze' to get insights.")
+        
+        # Add placeholder text with example
+        placeholder_text = (
+            "Example: I'm really excited about this new project! "
+            "The team has been working hard, and we've made significant progress. "
+            "However, there are still some challenges we need to address."
         )
+        
+        text_content = st.text_area(
+            "Text Input",
+            height=200,
+            placeholder=placeholder_text,
+            help="Enter at least 10 words for better analysis"
+        )
+        
+        # Add character count and input validation
+        if text_content:
+            char_count = len(text_content)
+            word_count = len(text_content.split())
+            
+            # Show input statistics
+            col1, col2 = st.columns(2)
+            with col1:
+                st.info(f"📝 Characters: {char_count}")
+            with col2:
+                st.info(f"📚 Words: {word_count}")
+            
+            # Input validation
+            if word_count < 3:
+                st.warning("⚠️ Please enter more text for meaningful analysis (at least 3 words)")
+                text_content = None
         
     else:  # Text File Upload
         uploaded_file = st.file_uploader(
             "Upload a text file",
             type=['txt', 'md'],
-            help="Upload a text file for analysis"
+            help="Upload a text file for analysis. Supported formats: TXT, MD"
         )
         
         if uploaded_file:
             try:
+                # Security validation
+                is_valid, message = security_manager.validate_file(uploaded_file)
+                if not is_valid:
+                    st.error(f"❌ Security validation failed: {message}")
+                    return
+                    
                 text_content = uploaded_file.getvalue().decode('utf-8')
+                # Sanitize file content
+                text_content = security_manager.sanitize_text(text_content)
+                
+                # Show file info
+                st.success(f"✅ Successfully loaded: {uploaded_file.name}")
+                st.info(f"📝 File size: {len(text_content):,} characters")
+                
             except Exception as e:
                 st.error(f"Error reading file: {str(e)}")
                 return
     
     if text_content and text_content.strip():
         # Analysis options
+        st.markdown("---")
         st.subheader("Analysis Options")
+        
+        # Use columns for better layout
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            do_sentiment = st.checkbox("Sentiment Analysis", value=True)
+            do_sentiment = st.checkbox(
+                "Sentiment Analysis", 
+                value=True,
+                help="Analyze the emotional tone and sentiment of the text"
+            )
         with col2:
-            do_keywords = st.checkbox("Keyword Extraction", value=True)
+            do_keywords = st.checkbox(
+                "Keyword Extraction", 
+                value=True,
+                help="Extract key terms, phrases, and topics"
+            )
         with col3:
-            do_summary = st.checkbox("Text Summarization", value=True)
-            
-        # Process button
-        if st.button("Analyze Text", type="primary"):
-            with st.spinner("Analyzing text..."):
+            do_summary = st.checkbox(
+                "Text Summarization", 
+                value=True,
+                help="Generate a summary and analyze text complexity"
+            )
+        
+        # Analysis button with loading state
+        if st.button("🔍 Analyze Text", type="primary", use_container_width=True):
+            with st.spinner("🔄 Analyzing your text..."):
+                # Add progress indication
+                progress_bar = st.progress(0)
+                
                 # Basic text statistics
+                progress_bar.progress(20)
                 stats = analyze_text_stats(text_content)
                 
                 # Display basic metrics
+                progress_bar.progress(40)
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Words", stats["word_count"])
                 col2.metric("Sentences", stats["sentence_count"])
@@ -1288,6 +1424,7 @@ def text_analyzer():
                 col4.metric("Reading Time", f"{stats['reading_time']:.1f} min")
                 
                 # Create tabs for different analyses
+                progress_bar.progress(60)
                 tab1, tab2, tab3, tab4 = st.tabs([
                     "📊 Overview",
                     "😊 Sentiment",
@@ -1298,17 +1435,36 @@ def text_analyzer():
                 with tab1:
                     display_text_overview(stats, text_content)
                 
+                progress_bar.progress(70)
                 with tab2:
                     if do_sentiment:
                         display_sentiment_analysis(text_content)
                 
+                progress_bar.progress(80)
                 with tab3:
                     if do_keywords:
                         display_keyword_analysis(text_content)
                 
+                progress_bar.progress(90)
                 with tab4:
                     if do_summary:
                         display_text_summary(text_content)
+                
+                # Complete the progress bar
+                progress_bar.progress(100)
+                st.success("✨ Analysis completed!")
+                
+                # Add a divider
+                st.markdown("---")
+                
+                # Add helpful tip
+                st.info(
+                    "💡 **Tip:** Check all tabs above for detailed analysis results. "
+                    "Each tab provides different insights about your text."
+                )
+        else:
+            # Show instruction when no analysis is running
+            st.info("👆 Click 'Analyze Text' to start the analysis")
 
 def analyze_text_stats(text):
     """Analyze basic text statistics."""
@@ -1339,7 +1495,7 @@ def display_text_overview(stats, text):
         st.write(f"**Unique Words:** {stats['unique_words']}")
         st.write(f"**Avg Sentence Length:** {stats['avg_sentence_length']:.1f} words")
         st.write(f"**Vocabulary Diversity:** {stats['unique_ratio']:.1%}")
-    
+        
     with col2:
         st.info("📈 Word Length Distribution")
         words = text.split()
@@ -1355,7 +1511,7 @@ def display_text_overview(stats, text):
             st.altair_chart(chart, use_container_width=True)
 
 def display_sentiment_analysis(text):
-    """Display sentiment analysis using TextBlob."""
+    """Display sentiment analysis using TextBlob with enhanced accuracy."""
     st.subheader("Sentiment Analysis")
     
     try:
@@ -1366,16 +1522,22 @@ def display_sentiment_analysis(text):
         polarity = blob.sentiment.polarity
         subjectivity = blob.sentiment.subjectivity
         
-        # Determine sentiment category and confidence
-        if polarity > 0:
+        # Enhanced sentiment categorization with more nuanced thresholds
+        if polarity > 0.3:
             sentiment = "positive"
             confidence = min(abs(polarity) * 100, 100)
-        elif polarity < 0:
+        elif polarity < -0.1:  # More sensitive to negative sentiment
             sentiment = "negative"
             confidence = min(abs(polarity) * 100, 100)
         else:
-            sentiment = "neutral"
-            confidence = 50
+            # Check for negative indicators in the text
+            text_lower = text.lower()
+            if any(indicator in text_lower for indicator in NEGATIVE_INDICATORS):
+                sentiment = "negative"
+                confidence = 70  # Moderate confidence for pattern-based detection
+            else:
+                sentiment = "neutral"
+                confidence = 60
         
         # Display results with visual elements
         col1, col2 = st.columns(2)
@@ -1392,39 +1554,83 @@ def display_sentiment_analysis(text):
                      f"{sentiment_color} {sentiment.title()}", 
                      f"Confidence: {confidence:.1f}%")
             
+            # Subjectivity interpretation
+            subjectivity_label = (
+                "Very Objective" if subjectivity < 0.2 else
+                "Somewhat Objective" if subjectivity < 0.4 else
+                "Mixed" if subjectivity < 0.6 else
+                "Somewhat Subjective" if subjectivity < 0.8 else
+                "Very Subjective"
+            )
+            
             st.metric("Subjectivity", 
-                     f"{subjectivity:.1%}",
-                     "Higher % = More subjective")
+                     subjectivity_label,
+                     f"{subjectivity:.1%}")
         
         with col2:
-            # Analyze sentence-level sentiment
+            # Analyze sentence-level sentiment with context
             sentences = blob.sentences
-            sentence_sentiments = [
-                (str(sent), sent.sentiment.polarity) 
-                for sent in sentences[:3]
-            ]
+            sentence_sentiments = []
             
-            st.write("**Notable Phrases:**")
+            for sent in sentences[:5]:  # Analyze up to 5 sentences
+                sent_polarity = sent.sentiment.polarity
+                
+                # Check for negation in the sentence
+                sent_text = str(sent).lower()
+                has_negation = any(neg in sent_text for neg in NEGATIVE_INDICATORS)
+                
+                # Adjust polarity based on negation
+                if has_negation and sent_polarity >= 0:
+                    sent_polarity = -abs(sent_polarity) - 0.1  # Make it negative
+                
+                sentence_sentiments.append((str(sent), sent_polarity))
+            
+            st.write("**Key Phrases:**")
             for sent, sent_polarity in sentence_sentiments:
-                if abs(sent_polarity) > 0.2:  # Only show significant sentiments
-                    emoji = "📈" if sent_polarity > 0 else "📉"
-                    st.write(f"{emoji} *{sent}*")
+                if abs(sent_polarity) > 0.1:  # Show more subtle sentiments
+                    emoji = "📈" if sent_polarity > 0.1 else "📉"
+                    intensity = (
+                        "Strong" if abs(sent_polarity) > 0.5 else
+                        "Moderate" if abs(sent_polarity) > 0.3 else
+                        "Slight"
+                    )
+                    st.write(f"{emoji} *{intensity} {sent_polarity > 0 and 'Positive' or 'Negative'}: {sent}*")
         
         # Detailed analysis
         st.markdown("#### Detailed Analysis")
-        analysis_text = [
-            f"The text expresses a {sentiment} sentiment overall.",
-            f"The content is {subjectivity:.1%} subjective in nature.",
-            "Key emotional indicators suggest " + (
-                "strong feelings" if abs(polarity) > 0.5
-                else "moderate emotions" if abs(polarity) > 0.2
-                else "neutral or mixed emotions"
-            )
-        ]
-        st.write(" ".join(analysis_text))
+        
+        # Generate more nuanced analysis
+        analysis_points = []
+        
+        # Overall sentiment analysis
+        if sentiment == "negative":
+            analysis_points.append(f"The text expresses {intensity.lower()} negative sentiment overall.")
+        elif sentiment == "positive":
+            analysis_points.append(f"The text expresses {intensity.lower()} positive sentiment overall.")
+        else:
+            analysis_points.append("The text expresses a neutral or mixed sentiment overall.")
+        
+        # Subjectivity analysis
+        analysis_points.append(f"The content is {subjectivity_label.lower()} in nature, "
+                             f"indicating {'more personal opinions and emotions' if subjectivity > 0.5 else 'more factual and objective content'}.")
+        
+        # Emotional indicators
+        if abs(polarity) > 0.5:
+            analysis_points.append("Strong emotional indicators are present in the text.")
+        elif abs(polarity) > 0.3:
+            analysis_points.append("Moderate emotional indicators are present in the text.")
+        else:
+            analysis_points.append("The emotional tone is subtle or neutral.")
+        
+        # Context analysis
+        if any(sent_polarity < -0.1 for _, sent_polarity in sentence_sentiments):
+            analysis_points.append("Some negative sentiments were detected in specific phrases.")
+        
+        st.write(" ".join(analysis_points))
                 
     except Exception as e:
         st.error(f"Error in sentiment analysis: {str(e)}")
+        logger.error(f"Sentiment analysis error: {str(e)}")
 
 def display_keyword_analysis(text):
     """Display keyword and key phrase extraction using NLTK."""
@@ -1440,7 +1646,10 @@ def display_keyword_analysis(text):
         word_freq = Counter(words)
         
         # Get named entities with error handling
+        entities = {}
         try:
+            # Check if required resources are available
+            nltk.data.find('chunkers/maxent_ne_chunker_tab/english_ace_multiclass/')
             chunks = ne_chunk(pos_tag(word_tokenize(text)))
             entities = {
                 'PERSON': [],
@@ -1452,9 +1661,25 @@ def display_keyword_analysis(text):
                 if hasattr(chunk, 'label'):
                     if chunk.label() in entities:
                         entities[chunk.label()].append(' '.join([c[0] for c in chunk]))
-        except Exception as ner_error:
-            logger.warning(f"Named Entity Recognition failed: {str(ner_error)}")
-            entities = {}
+        except (LookupError, Exception) as ner_error:
+            # Use alternative approach for named entities
+            tagged_words = pos_tag(word_tokenize(text))
+            entities = {
+                'NAMES': [],
+                'ORGANIZATIONS': [],
+                'LOCATIONS': []
+            }
+            
+            # Simple rule-based NER
+            for i, (word, tag) in enumerate(tagged_words):
+                if tag.startswith('NNP'):  # Proper noun
+                    if i > 0 and tagged_words[i-1][1].startswith('NNP'):
+                        # Combine consecutive proper nouns
+                        entities['NAMES'].append(f"{tagged_words[i-1][0]} {word}")
+                    else:
+                        entities['NAMES'].append(word)
+            
+            logger.debug("Using alternative NER approach")
         
         # Get key phrases (using POS patterns)
         tagged = pos_tag(word_tokenize(text))
