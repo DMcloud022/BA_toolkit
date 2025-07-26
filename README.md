@@ -2,42 +2,22 @@
 
 A toolkit for business analysis tasks.
 
-## Prerequisites
-
-- Python 3.x
-- pip (Python package installer)
-
-## Installation
-
-1. Create a virtual environment
 ```bash
+# Create and activate virtual environment
 # On Linux/macOS
-python3 -m venv venv
+python3 -m venv venv && source venv/bin/activate
 
 # On Windows
-python -m venv venv
-```
+python -m venv venv && .\venv\Scripts\activate
 
-2. Activate the virtual environment
-```bash
-# On Linux/macOS
-source venv/bin/activate
-
-# On Windows
-.\venv\Scripts\activate
-```
-
-3. Install required dependencies
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-## Usage
+# Set up environment variables
+cp .env.sample .env  # On Linux/macOS
+copy .env.sample .env  # On Windows
 
-To run the Streamlit application:
+# Edit .env and replace placeholder values
 
-```bash
+# Run the application
 streamlit run main.py
-```
-
-This will start the Streamlit server and automatically open the application in your default web browser. If it doesn't open automatically, you can access it at `http://localhost:8501`.
